@@ -1,0 +1,67 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;200;300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    @apply bg-paper text-navy;
+  }
+  
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-gray-100;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 rounded-full hover:bg-gray-400 transition-colors;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-6 py-2.5 bg-navy text-white rounded-lg hover:bg-navy/90 focus:outline-none focus:ring-2 focus:ring-navy/40 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed font-medium;
+  }
+  
+  .btn-secondary {
+    @apply px-6 py-2.5 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed font-medium;
+  }
+  
+  .btn-outline {
+    @apply px-6 py-2.5 border-2 border-navy text-navy rounded-lg hover:bg-navy/5 focus:outline-none focus:ring-2 focus:ring-navy/40 focus:ring-offset-2 transition-all duration-200 font-medium;
+  }
+  
+  .input-field {
+    @apply w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cobalt/40 focus:border-cobalt transition-all duration-200 bg-white;
+  }
+  
+  .input-label {
+    @apply block text-sm font-medium text-navy mb-1.5;
+  }
+  
+  .card {
+    @apply bg-white rounded-xl shadow-card hover:shadow-soft transition-shadow duration-200 p-6;
+  }
+  
+  .sidebar-link {
+    @apply flex items-center px-4 py-2.5 text-gray-700 hover:bg-gray-100 hover:text-navy rounded-xl transition-all duration-200 text-sm font-medium;
+  }
+  
+  .sidebar-link.active {
+    @apply bg-navy text-white;
+  }
+}
