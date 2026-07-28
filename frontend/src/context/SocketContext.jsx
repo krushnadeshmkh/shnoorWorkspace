@@ -27,7 +27,7 @@ export const SocketProvider = ({ children }) => {
       return
     }
 
-    const socketInstance = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000', {
+    const socketInstance = io(import.meta.env.VITE_SOCKET_URL || 'https://shnoorworkspace.onrender.com', {
       auth: { token },
       transports: ['websocket', 'polling'],
       reconnection: true,

@@ -12,7 +12,7 @@ import {
 import { toast } from 'react-toastify'
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const API_URL = import.meta.env.VITE_API_URL || 'https://shnoorworkspace.onrender.com'
 
 const AdminPrivateChat = () => {
   const { userId } = useParams()
@@ -143,7 +143,7 @@ const AdminPrivateChat = () => {
     if (!cleanPath.startsWith('/')) {
       cleanPath = '/' + cleanPath
     }
-    const baseUrl = 'http://localhost:5000'
+    const baseUrl = 'https://shnoorworkspace.onrender.com'
     const downloadUrl = `${baseUrl}${cleanPath}`
     window.open(downloadUrl, '_blank')
   }
@@ -358,7 +358,7 @@ const AdminPrivateChat = () => {
                                   {isImage ? (
                                     <div className="relative group">
                                       <img 
-                                        src={`http://localhost:5000${fileUrl}`}
+                                        src={`https://shnoorworkspace.onrender.com${fileUrl}`}
                                         alt={att.file_name}
                                         className="max-w-[130px] sm:max-w-[150px] md:max-w-[200px] max-h-[110px] sm:max-h-[120px] md:max-h-[150px] rounded-lg cursor-pointer object-cover"
                                         onError={(e) => {
@@ -377,7 +377,7 @@ const AdminPrivateChat = () => {
                                   ) : isVideo ? (
                                     <div className="relative group">
                                       <video 
-                                        src={`http://localhost:5000${fileUrl}`}
+                                        src={`https://shnoorworkspace.onrender.com${fileUrl}`}
                                         className="max-w-[130px] sm:max-w-[150px] md:max-w-[200px] max-h-[110px] sm:max-h-[120px] md:max-h-[150px] rounded-lg cursor-pointer"
                                         controls
                                         onClick={(e) => e.stopPropagation()}
@@ -385,7 +385,7 @@ const AdminPrivateChat = () => {
                                     </div>
                                   ) : isAudio ? (
                                     <audio 
-                                      src={`http://localhost:5000${fileUrl}`}
+                                      src={`https://shnoorworkspace.onrender.com${fileUrl}`}
                                       className="w-full max-w-[150px] sm:max-w-[180px] md:max-w-[200px]"
                                       controls
                                       onClick={(e) => e.stopPropagation()}

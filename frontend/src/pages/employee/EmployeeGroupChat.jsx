@@ -12,7 +12,7 @@ import {
 import { toast } from 'react-toastify'
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const API_URL = import.meta.env.VITE_API_URL || 'https://shnoorworkspace.onrender.com'
 
 const EmployeeGroupChat = () => {
   const { groupId } = useParams()
@@ -154,7 +154,7 @@ const EmployeeGroupChat = () => {
     if (!cleanPath.startsWith('/')) {
       cleanPath = '/' + cleanPath
     }
-    const baseUrl = 'http://localhost:5000'
+    const baseUrl = 'https://shnoorworkspace.onrender.com'
     const downloadUrl = `${baseUrl}${cleanPath}`
     window.open(downloadUrl, '_blank')
   }
@@ -394,7 +394,7 @@ const EmployeeGroupChat = () => {
                                         const isImage = att.mime_type?.startsWith('image/')
                                         const isVideo = att.mime_type?.startsWith('video/')
                                         const isAudio = att.mime_type?.startsWith('audio/')
-                                        const displayUrl = `http://localhost:5000${fileUrl}`;
+                                        const displayUrl = `https://shnoorworkspace.onrender.com${fileUrl}`;
 
                                         return (
                                           <div key={idx} className={`flex items-center gap-1 p-1 rounded-lg ${
