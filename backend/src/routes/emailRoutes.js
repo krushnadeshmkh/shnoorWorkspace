@@ -27,7 +27,10 @@ const upload = multer({
 
 router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
   try {
-    const { receiverEmail, cc, bcc, subject, content, parentEmailId } = req.body;
+    console.log('Request body:', req.body);
+    console.log('Files:', req.files);
+    
+    const { receiverEmail, subject, content, parentEmailId } = req.body;
     const senderId = req.user.id;
     
     if (!receiverEmail) {
@@ -43,8 +46,31 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
       return res.status(400).json({ message: 'Invalid recipient email format' });
     }
 
-    const ccList = cc ? cc.split(',').filter(Boolean).map(e => e.trim()) : [];
-    const bccList = bcc ? bcc.split(',').filter(Boolean).map(e => e.trim()) : [];
+    let ccList = [];
+    let bccList = [];
+
+    if (req.body.cc) {
+      if (typeof req.body.cc === 'string' && req.body.cc.includes(',')) {
+        ccList = req.body.cc.split(',').filter(Boolean).map(e => e.trim());
+      } else if (typeof req.body.cc === 'string') {
+        ccList = req.body.cc ? [req.body.cc.trim()] : [];
+      } else if (Array.isArray(req.body.cc)) {
+        ccList = req.body.cc.filter(Boolean).map(e => e.trim());
+      }
+    }
+
+    if (req.body.bcc) {
+      if (typeof req.body.bcc === 'string' && req.body.bcc.includes(',')) {
+        bccList = req.body.bcc.split(',').filter(Boolean).map(e => e.trim());
+      } else if (typeof req.body.bcc === 'string') {
+        bccList = req.body.bcc ? [req.body.bcc.trim()] : [];
+      } else if (Array.isArray(req.body.bcc)) {
+        bccList = req.body.bcc.filter(Boolean).map(e => e.trim());
+      }
+    }
+
+    console.log('CC List:', ccList);
+    console.log('BCC List:', bccList);
 
     for (const email of ccList) {
       if (!validateEmail(email)) {
@@ -60,12 +86,17 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
 
     const allRecipients = [receiverEmail, ...ccList, ...bccList];
     const uniqueRecipients = [...new Set(allRecipients)];
+    
+    console.log('All recipients:', uniqueRecipients);
+
     const placeholders = uniqueRecipients.map((_, i) => `$${i + 1}`).join(',');
 
     const recipientsResult = await pool.query(
-      `SELECT id, email FROM users WHERE email IN (${placeholders}) AND is_active = true`,
+      `SELECT id, email FROM users WHERE email IN (${placeholders})`,
       uniqueRecipients
     );
+
+    console.log('Found users:', recipientsResult.rows);
 
     const foundEmails = recipientsResult.rows.map(r => r.email);
     const notFound = uniqueRecipients.filter(email => !foundEmails.includes(email));
@@ -85,58 +116,39 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
     const ccUserIds = ccList.map(email => emailToId[email]).filter(Boolean);
     const bccUserIds = bccList.map(email => emailToId[email]).filter(Boolean);
 
+    const hasAttachments = req.files && req.files.length > 0;
+    const parentId = parentEmailId ? parseInt(parentEmailId) : null;
+
     let emailResult;
     let emailId;
 
-    if (ccUserIds.length > 0 || bccUserIds.length > 0) {
-      const result = await pool.query(
-        `INSERT INTO emails (sender_id, receiver_id, subject, content, has_attachments, parent_email_id, is_cc) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [senderId, mainReceiverId, subject || '', content || '', req.files && req.files.length > 0, parentEmailId || null, true]
-      );
-      emailResult = result;
-      emailId = result.rows[0].id;
+    const result = await pool.query(
+      `INSERT INTO emails (sender_id, receiver_id, subject, content, has_attachments, parent_email_id) 
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [senderId, mainReceiverId, subject || '', content || '', hasAttachments, parentId]
+    );
+    
+    emailResult = result;
+    emailId = result.rows[0].id;
 
+    if (ccUserIds.length > 0) {
       for (const ccUserId of ccUserIds) {
         await pool.query(
-          `INSERT INTO emails (sender_id, receiver_id, subject, content, has_attachments, parent_email_id, is_cc, is_cc_recipient) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [senderId, ccUserId, subject || '', content || '', req.files && req.files.length > 0, parentEmailId || null, true, true]
+          `INSERT INTO emails (sender_id, receiver_id, subject, content, has_attachments, parent_email_id) 
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [senderId, ccUserId, subject || '', content || '', hasAttachments, parentId]
         );
       }
+    }
 
+    if (bccUserIds.length > 0) {
       for (const bccUserId of bccUserIds) {
         await pool.query(
-          `INSERT INTO emails (sender_id, receiver_id, subject, content, has_attachments, parent_email_id, is_cc, is_bcc_recipient) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [senderId, bccUserId, subject || '', content || '', req.files && req.files.length > 0, parentEmailId || null, true, true]
+          `INSERT INTO emails (sender_id, receiver_id, subject, content, has_attachments, parent_email_id) 
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [senderId, bccUserId, subject || '', content || '', hasAttachments, parentId]
         );
       }
-
-      for (const ccEmail of ccList) {
-        const ccUserId = emailToId[ccEmail];
-        await pool.query(
-          `INSERT INTO email_cc (email_id, user_id, type) VALUES ($1, $2, 'cc')`,
-          [emailId, ccUserId]
-        );
-      }
-
-      for (const bccEmail of bccList) {
-        const bccUserId = emailToId[bccEmail];
-        await pool.query(
-          `INSERT INTO email_cc (email_id, user_id, type) VALUES ($1, $2, 'bcc')`,
-          [emailId, bccUserId]
-        );
-      }
-
-    } else {
-      const result = await pool.query(
-        `INSERT INTO emails (sender_id, receiver_id, subject, content, has_attachments, parent_email_id) 
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [senderId, mainReceiverId, subject || '', content || '', req.files && req.files.length > 0, parentEmailId || null]
-      );
-      emailResult = result;
-      emailId = result.rows[0].id;
     }
 
     if (req.files && req.files.length > 0) {
@@ -155,11 +167,13 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
     );
 
     const io = req.app.get('io');
-    for (const recipient of recipientsResult.rows) {
-      io.to(`user_${recipient.id}`).emit('new_email', {
-        email: emailResult.rows[0],
-        sender: senderResult.rows[0]
-      });
+    if (io) {
+      for (const recipient of recipientsResult.rows) {
+        io.to(`user_${recipient.id}`).emit('new_email', {
+          email: emailResult.rows[0],
+          sender: senderResult.rows[0]
+        });
+      }
     }
 
     res.status(201).json({
@@ -172,8 +186,13 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
       }
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Failed to send email' });
+    console.error('Send email error:', error);
+    res.status(500).json({ 
+      message: 'Failed to send email',
+      error: error.message,
+      detail: error.detail || null,
+      code: error.code || null
+    });
   }
 });
 
@@ -210,13 +229,32 @@ router.post('/:emailId/undo-send', auth, async (req, res) => {
 
 router.post('/drafts', auth, upload.array('attachments', 5), async (req, res) => {
   try {
-    const { receiverEmail, cc, bcc, subject, content } = req.body;
+    const { receiverEmail, subject, content } = req.body;
     const userId = req.user.id;
+    
+    let ccValue = '';
+    let bccValue = '';
+    
+    if (req.body.cc) {
+      if (Array.isArray(req.body.cc)) {
+        ccValue = req.body.cc.join(',');
+      } else if (typeof req.body.cc === 'string') {
+        ccValue = req.body.cc;
+      }
+    }
+    
+    if (req.body.bcc) {
+      if (Array.isArray(req.body.bcc)) {
+        bccValue = req.body.bcc.join(',');
+      } else if (typeof req.body.bcc === 'string') {
+        bccValue = req.body.bcc;
+      }
+    }
     
     const result = await pool.query(
       `INSERT INTO email_drafts (user_id, receiver_email, cc, bcc, subject, content, has_attachments) 
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [userId, receiverEmail || '', cc || '', bcc || '', subject || '', content || '', req.files && req.files.length > 0]
+      [userId, receiverEmail || '', ccValue, bccValue, subject || '', content || '', req.files && req.files.length > 0]
     );
     
     const draftId = result.rows[0].id;
@@ -420,6 +458,7 @@ router.get('/inbox', auth, async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch inbox' });
   }
 });
+
 router.get('/sent', auth, async (req, res) => {
   try {
     const userId = req.user.id;

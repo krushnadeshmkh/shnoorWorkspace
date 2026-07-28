@@ -383,29 +383,26 @@ const AdminInbox = () => {
     return count;
   };
 
-  const handleSend = async (e) => {
-    e.preventDefault();
-    if (!formData.receiverEmail) {
-      toast.error('Please enter a recipient email');
-      return;
-    }
-    const sendData = {
-      ...formData,
-      cc: formData.cc.join(','),
-      bcc: formData.bcc.join(','),
-    };
-    setComposeLoading(true);
-    try {
-      await emailAPI.sendEmail(sendData);
-      toast.success(`Email sent to ${getRecipientCount()} recipient${getRecipientCount() > 1 ? 's' : ''}`);
-      setShowCompose(false);
-      fetchEmails(currentPage);
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to send email');
-    } finally {
-      setComposeLoading(false);
-    }
-  };
+const handleSend = async (e) => {
+  e.preventDefault();
+  if (!formData.receiverEmail) {
+    toast.error('Please enter a recipient email');
+    return;
+  }
+  
+  setComposeLoading(true);
+  try {
+    await emailAPI.sendEmail(formData);
+    toast.success(`Email sent to ${getRecipientCount()} recipient${getRecipientCount() > 1 ? 's' : ''}`);
+    setShowCompose(false);
+    fetchEmails(currentPage);
+  } catch (error) {
+    console.error('Send error:', error);
+    toast.error(error.response?.data?.message || error.response?.data?.error || 'Failed to send email');
+  } finally {
+    setComposeLoading(false);
+  }
+};
 
   const handleSaveDraft = async () => {
     try {

@@ -3,19 +3,26 @@ import axios from 'axios';
 const API_URL = import.meta.env.VITE_API_URL || 'https://shnoorworkspace.onrender.com/api';
 
 export const emailAPI = {
-  sendEmail: async (data) => {
+sendEmail: async (data) => {
+  const hasAttachments = data.attachments && data.attachments.length > 0;
+  
+  if (hasAttachments) {
     const formData = new FormData();
     formData.append('receiverEmail', data.receiverEmail);
-    formData.append('cc', data.cc || '');
-    formData.append('bcc', data.bcc || '');
     formData.append('subject', data.subject || '');
     formData.append('content', data.content || '');
     
-    if (data.attachments) {
-      data.attachments.forEach(file => {
-        formData.append('attachments', file);
-      });
+    if (data.cc && data.cc.length > 0) {
+      data.cc.forEach(email => formData.append('cc', email));
     }
+    
+    if (data.bcc && data.bcc.length > 0) {
+      data.bcc.forEach(email => formData.append('bcc', email));
+    }
+    
+    data.attachments.forEach(file => {
+      formData.append('attachments', file);
+    });
     
     const response = await axios.post(`${API_URL}/emails/send`, formData, {
       headers: {
@@ -24,7 +31,24 @@ export const emailAPI = {
       }
     });
     return response.data;
-  },
+  } else {
+    const payload = {
+      receiverEmail: data.receiverEmail,
+      subject: data.subject || '',
+      content: data.content || '',
+      cc: data.cc || [],
+      bcc: data.bcc || []
+    };
+    
+    const response = await axios.post(`${API_URL}/emails/send`, payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${localStorage.getItem('token')}`
+      }
+    });
+    return response.data;
+  }
+},
 
   undoSend: async (emailId) => {
     const response = await axios.post(`${API_URL}/emails/${emailId}/undo-send`, {}, {
@@ -36,12 +60,31 @@ export const emailAPI = {
   saveDraft: async (data) => {
     const formData = new FormData();
     formData.append('receiverEmail', data.receiverEmail || '');
-    formData.append('cc', data.cc || '');
-    formData.append('bcc', data.bcc || '');
+    
+    if (data.cc && data.cc.length > 0) {
+      if (Array.isArray(data.cc)) {
+        data.cc.forEach(email => formData.append('cc[]', email));
+      } else {
+        formData.append('cc', data.cc);
+      }
+    } else {
+      formData.append('cc', '');
+    }
+    
+    if (data.bcc && data.bcc.length > 0) {
+      if (Array.isArray(data.bcc)) {
+        data.bcc.forEach(email => formData.append('bcc[]', email));
+      } else {
+        formData.append('bcc', data.bcc);
+      }
+    } else {
+      formData.append('bcc', '');
+    }
+    
     formData.append('subject', data.subject || '');
     formData.append('content', data.content || '');
     
-    if (data.attachments) {
+    if (data.attachments && data.attachments.length > 0) {
       data.attachments.forEach(file => {
         formData.append('attachments', file);
       });
