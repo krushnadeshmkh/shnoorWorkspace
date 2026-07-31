@@ -4,7 +4,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
 const fs = require('fs');
-
+const compression = require('compression');
 require('dotenv').config();
 
 const authRoutes = require('./routes/authRoutes');
@@ -16,37 +16,43 @@ const chatSocket = require('./socket/chatSocket');
 
 const app = express();
 const server = http.createServer(app);
+
+server.timeout = 60000;
+server.keepAliveTimeout = 60000;
+
 const io = socketIo(server, {
   cors: {
     origin: process.env.CLIENT_URL || "http://localhost:5173",
     methods: ["GET", "POST"],
     credentials: true
-  }
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling']
 });
 
 chatSocket(io);
+app.set('io', io);
 
-const uploadsDir = './uploads';
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-const chatUploadsDir = './uploads/chat';
-if (!fs.existsSync(chatUploadsDir)) {
-  fs.mkdirSync(chatUploadsDir, { recursive: true });
-}
-
-const emailUploadsDir = './uploads/emails';
-if (!fs.existsSync(emailUploadsDir)) {
-  fs.mkdirSync(emailUploadsDir, { recursive: true });
-}
+app.use(compression({
+  level: 6,
+  threshold: 1024
+}));
 
 app.use(cors({ 
   origin: process.env.CLIENT_URL || '*',
   credentials: true 
 }));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+app.use((req, res, next) => {
+  res.setTimeout(30000, () => {
+    res.status(408).json({ message: 'Request timeout' });
+  });
+  next();
+});
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -80,6 +86,7 @@ app.get('/uploads/*', (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename="${path.basename(fullPath)}"`);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
     
     res.sendFile(fullPath);
   } catch (error) {
@@ -108,6 +115,6 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });

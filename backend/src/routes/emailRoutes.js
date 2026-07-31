@@ -27,9 +27,6 @@ const upload = multer({
 
 router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
   try {
-    console.log('Request body:', req.body);
-    console.log('Files:', req.files);
-    
     const { receiverEmail, subject, content, parentEmailId } = req.body;
     const senderId = req.user.id;
     
@@ -69,9 +66,6 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
       }
     }
 
-    console.log('CC List:', ccList);
-    console.log('BCC List:', bccList);
-
     for (const email of ccList) {
       if (!validateEmail(email)) {
         return res.status(400).json({ message: `Invalid CC email format: ${email}` });
@@ -86,8 +80,6 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
 
     const allRecipients = [receiverEmail, ...ccList, ...bccList];
     const uniqueRecipients = [...new Set(allRecipients)];
-    
-    console.log('All recipients:', uniqueRecipients);
 
     const placeholders = uniqueRecipients.map((_, i) => `$${i + 1}`).join(',');
 
@@ -95,8 +87,6 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
       `SELECT id, email FROM users WHERE email IN (${placeholders})`,
       uniqueRecipients
     );
-
-    console.log('Found users:', recipientsResult.rows);
 
     const foundEmails = recipientsResult.rows.map(r => r.email);
     const notFound = uniqueRecipients.filter(email => !foundEmails.includes(email));
@@ -119,7 +109,6 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
     const hasAttachments = req.files && req.files.length > 0;
     const parentId = parentEmailId ? parseInt(parentEmailId) : null;
 
-    let emailResult;
     let emailId;
 
     const result = await pool.query(
@@ -128,7 +117,6 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
       [senderId, mainReceiverId, subject || '', content || '', hasAttachments, parentId]
     );
     
-    emailResult = result;
     emailId = result.rows[0].id;
 
     if (ccUserIds.length > 0) {
@@ -170,7 +158,7 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
     if (io) {
       for (const recipient of recipientsResult.rows) {
         io.to(`user_${recipient.id}`).emit('new_email', {
-          email: emailResult.rows[0],
+          email: result.rows[0],
           sender: senderResult.rows[0]
         });
       }
@@ -179,7 +167,7 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
     res.status(201).json({
       message: 'Email sent successfully',
       email: {
-        ...emailResult.rows[0],
+        ...result.rows[0],
         sender: senderResult.rows[0],
         cc: ccList,
         bcc: bccList
@@ -189,9 +177,7 @@ router.post('/send', auth, upload.array('attachments', 5), async (req, res) => {
     console.error('Send email error:', error);
     res.status(500).json({ 
       message: 'Failed to send email',
-      error: error.message,
-      detail: error.detail || null,
-      code: error.code || null
+      error: error.message
     });
   }
 });
@@ -363,93 +349,54 @@ router.get('/inbox', auth, async (req, res) => {
   try {
     const userId = req.user.id;
     const { limit = 20, page = 1, search = '', category = 'all' } = req.query;
-    const limitNum = parseInt(limit);
+    const limitNum = Math.min(parseInt(limit) || 20, 100);
     const offset = (parseInt(page) - 1) * limitNum;
 
-    let baseQuery = `
-      SELECT e.id, e.sender_id, e.subject, e.content, e.created_at, 
-             e.is_read, e.is_starred, e.is_important, e.has_attachments,
-             u.full_name as sender_name, u.email as sender_email,
-             (
-               SELECT json_agg(json_build_object(
-                 'id', l.id, 'name', l.name, 'color', l.color
-               ))
-               FROM email_label_mappings lm 
-               JOIN email_labels l ON lm.label_id = l.id 
-               WHERE lm.email_id = e.id
-             ) as labels
-      FROM emails e
-      JOIN users u ON e.sender_id = u.id
-      WHERE e.receiver_id = $1
-        AND e.is_deleted = false
-        AND e.is_spam = false
-    `;
-    
+    let whereClause = 'e.receiver_id = $1 AND e.is_deleted = false AND e.is_spam = false';
     const params = [userId];
     let paramIndex = 2;
 
     if (category === 'unread') {
-      baseQuery += ` AND e.is_read = false`;
+      whereClause += ' AND e.is_read = false';
     } else if (category === 'starred') {
-      baseQuery += ` AND e.is_starred = true`;
+      whereClause += ' AND e.is_starred = true';
     } else if (category === 'important') {
-      baseQuery += ` AND e.is_important = true`;
-    } else if (category === 'has_attachments') {
-      baseQuery += ` AND e.has_attachments = true`;
+      whereClause += ' AND e.is_important = true';
     }
 
     if (search) {
-      baseQuery += ` AND (e.subject ILIKE $${paramIndex} OR e.content ILIKE $${paramIndex})`;
+      whereClause += ` AND (e.subject ILIKE $${paramIndex} OR e.content ILIKE $${paramIndex})`;
       params.push(`%${search}%`);
       paramIndex++;
     }
 
-    baseQuery += ` ORDER BY e.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    const query = `
+      SELECT e.id, e.sender_id, e.subject, e.content, e.created_at, 
+             e.is_read, e.is_starred, e.is_important, e.has_attachments,
+             u.full_name as sender_name, u.email as sender_email,
+             COUNT(*) OVER() as total_count
+      FROM emails e
+      JOIN users u ON e.sender_id = u.id
+      WHERE ${whereClause}
+      ORDER BY e.created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
     params.push(limitNum, offset);
 
-    const result = await pool.query(baseQuery, params);
-
-    let countQuery = `
-      SELECT COUNT(*) FROM emails e
-      WHERE e.receiver_id = $1
-        AND e.is_deleted = false
-        AND e.is_spam = false
-    `;
-    const countParams = [userId];
-    let countIndex = 2;
-
-    if (category === 'unread') {
-      countQuery += ` AND e.is_read = false`;
-    } else if (category === 'starred') {
-      countQuery += ` AND e.is_starred = true`;
-    } else if (category === 'important') {
-      countQuery += ` AND e.is_important = true`;
-    } else if (category === 'has_attachments') {
-      countQuery += ` AND e.has_attachments = true`;
-    }
-
-    if (search) {
-      countQuery += ` AND (e.subject ILIKE $${countIndex} OR e.content ILIKE $${countIndex})`;
-      countParams.push(`%${search}%`);
-      countIndex++;
-    }
-
-    const countResult = await pool.query(countQuery, countParams);
-    const total = parseInt(countResult.rows[0].count);
-
+    const result = await pool.query(query, params);
+    
     const unreadResult = await pool.query(
       'SELECT COUNT(*) FROM emails WHERE receiver_id = $1 AND is_read = false AND is_deleted = false AND is_spam = false',
       [userId]
     );
-    const unreadCount = parseInt(unreadResult.rows[0].count);
 
-    const hasMore = (parseInt(page) * limitNum) < total;
+    const total = result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0;
 
     res.json({
       emails: result.rows,
       total,
-      unreadCount,
-      hasMore,
+      unreadCount: parseInt(unreadResult.rows[0].count),
+      hasMore: (parseInt(page) * limitNum) < total,
       page: parseInt(page),
       pageSize: limitNum
     });
@@ -492,16 +439,7 @@ router.get('/sent', auth, async (req, res) => {
     const query = `
       SELECT e.id, e.receiver_id, e.subject, e.content, e.created_at, 
              e.has_attachments,
-             u.full_name as receiver_name, u.email as receiver_email,
-             (
-               SELECT json_agg(json_build_object(
-                 'id', cc.id, 'email', u2.email, 'fullName', u2.full_name,
-                 'type', cc.type
-               ))
-               FROM email_cc cc
-               JOIN users u2 ON cc.user_id = u2.id
-               WHERE cc.email_id = e.id
-             ) as cc_recipients
+             u.full_name as receiver_name, u.email as receiver_email
       FROM emails e
       JOIN users u ON e.receiver_id = u.id
       WHERE ${whereClause}
@@ -923,18 +861,7 @@ router.get('/:emailId', auth, async (req, res) => {
               u1.full_name as sender_name, 
               u1.email as sender_email,
               u2.full_name as receiver_name,
-              u2.email as receiver_email,
-              (
-                SELECT json_agg(json_build_object(
-                  'id', cc.id, 
-                  'email', u3.email, 
-                  'fullName', u3.full_name,
-                  'type', cc.type
-                ))
-                FROM email_cc cc
-                JOIN users u3 ON cc.user_id = u3.id
-                WHERE cc.email_id = e.id
-              ) as cc_recipients
+              u2.email as receiver_email
        FROM emails e
        JOIN users u1 ON e.sender_id = u1.id
        JOIN users u2 ON e.receiver_id = u2.id
@@ -963,15 +890,6 @@ router.get('/:emailId', auth, async (req, res) => {
       [emailId]
     );
     email.replies = repliesResult.rows;
-    
-    const labelsResult = await pool.query(
-      `SELECT l.id, l.name, l.color 
-       FROM email_label_mappings lm 
-       JOIN email_labels l ON lm.label_id = l.id 
-       WHERE lm.email_id = $1`,
-      [emailId]
-    );
-    email.labels = labelsResult.rows;
     
     if (!email.is_read && email.receiver_id === userId) {
       await pool.query(
@@ -1160,59 +1078,6 @@ router.post('/:emailId/undo', auth, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Failed to restore email' });
-  }
-});
-
-router.post('/:emailId/labels', auth, async (req, res) => {
-  try {
-    const { emailId } = req.params;
-    const { labelId } = req.body;
-    const userId = req.user.id;
-    
-    const emailCheck = await pool.query(
-      'SELECT * FROM emails WHERE id = $1 AND (sender_id = $2 OR receiver_id = $2)',
-      [emailId, userId]
-    );
-    
-    if (emailCheck.rows.length === 0) {
-      return res.status(404).json({ message: 'Email not found' });
-    }
-    
-    await pool.query(
-      'INSERT INTO email_label_mappings (email_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-      [emailId, labelId]
-    );
-    
-    res.json({ message: 'Label applied successfully' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Failed to apply label' });
-  }
-});
-
-router.delete('/:emailId/labels/:labelId', auth, async (req, res) => {
-  try {
-    const { emailId, labelId } = req.params;
-    const userId = req.user.id;
-    
-    const emailCheck = await pool.query(
-      'SELECT * FROM emails WHERE id = $1 AND (sender_id = $2 OR receiver_id = $2)',
-      [emailId, userId]
-    );
-    
-    if (emailCheck.rows.length === 0) {
-      return res.status(404).json({ message: 'Email not found' });
-    }
-    
-    await pool.query(
-      'DELETE FROM email_label_mappings WHERE email_id = $1 AND label_id = $2',
-      [emailId, labelId]
-    );
-    
-    res.json({ message: 'Label removed successfully' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Failed to remove label' });
   }
 });
 

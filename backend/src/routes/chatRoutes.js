@@ -40,13 +40,20 @@ router.get('/groups', auth, async (req, res) => {
               true as is_member,
               (SELECT is_muted FROM chat_group_members WHERE group_id = g.id AND user_id = $1) as is_muted,
               (SELECT is_admin FROM chat_group_members WHERE group_id = g.id AND user_id = $1) as is_admin,
-              (SELECT m.content FROM chat_messages m WHERE m.group_id = g.id ORDER BY m.created_at DESC LIMIT 1) as last_message,
-              (SELECT m.created_at FROM chat_messages m WHERE m.group_id = g.id ORDER BY m.created_at DESC LIMIT 1) as last_message_at
+              m.content as last_message,
+              m.created_at as last_message_at
        FROM chat_groups g
        JOIN users u ON g.created_by = u.id
+       LEFT JOIN LATERAL (
+         SELECT content, created_at 
+         FROM chat_messages 
+         WHERE group_id = g.id 
+         ORDER BY created_at DESC 
+         LIMIT 1
+       ) m ON true
        WHERE g.is_active = true
        AND EXISTS (SELECT 1 FROM chat_group_members cgm WHERE cgm.group_id = g.id AND cgm.user_id = $1)
-       ORDER BY last_message_at DESC NULLS LAST, g.created_at DESC`,
+       ORDER BY m.created_at DESC NULLS LAST, g.created_at DESC`,
       [userId]
     );
 
@@ -138,11 +145,11 @@ router.get('/groups/:groupId', auth, async (req, res) => {
 router.get('/groups/:groupId/messages', auth, async (req, res) => {
   try {
     const { groupId } = req.params;
-    const { limit = 50, offset = 0 } = req.query;
+    const { limit = 50, cursor } = req.query;
     const userId = req.user.id;
 
     const memberCheck = await pool.query(
-      'SELECT * FROM chat_group_members WHERE group_id = $1 AND user_id = $2',
+      'SELECT 1 FROM chat_group_members WHERE group_id = $1 AND user_id = $2',
       [groupId, userId]
     );
 
@@ -150,27 +157,60 @@ router.get('/groups/:groupId/messages', auth, async (req, res) => {
       return res.status(403).json({ message: 'Not a member of this group' });
     }
 
-    const result = await pool.query(
-      `SELECT m.*,
-              u.full_name as sender_name,
-              u.email as sender_email,
-              (SELECT json_agg(json_build_object('user_id', r.user_id, 'emoji', r.emoji, 'full_name', u2.full_name))
-               FROM chat_reactions r
-               JOIN users u2 ON r.user_id = u2.id
-               WHERE r.message_id = m.id) as reactions,
-              (SELECT json_agg(json_build_object('file_name', a.file_name, 'file_path', a.file_path, 'file_size', a.file_size, 'mime_type', a.mime_type))
-               FROM chat_message_attachments a WHERE a.message_id = m.id) as attachments,
-              (SELECT json_build_object('id', pm.id, 'content', pm.content, 'sender_name', pu.full_name)
-               FROM chat_messages pm JOIN users pu ON pm.sender_id = pu.id WHERE pm.id = m.parent_message_id) as parent_message
-       FROM chat_messages m
-       JOIN users u ON m.sender_id = u.id
-       WHERE m.group_id = $1
-       ORDER BY m.created_at DESC
-       LIMIT $2 OFFSET $3`,
-      [groupId, limit, offset]
-    );
+    let query = `
+      SELECT m.*,
+             u.full_name as sender_name,
+             u.email as sender_email,
+             COALESCE(
+               (SELECT json_agg(json_build_object('user_id', r.user_id, 'emoji', r.emoji, 'full_name', u2.full_name))
+                FROM chat_reactions r
+                JOIN users u2 ON r.user_id = u2.id
+                WHERE r.message_id = m.id),
+               '[]'
+             ) as reactions,
+             COALESCE(
+               (SELECT json_agg(json_build_object('file_name', a.file_name, 'file_path', a.file_path, 'file_size', a.file_size, 'mime_type', a.mime_type))
+                FROM chat_message_attachments a WHERE a.message_id = m.id),
+               '[]'
+             ) as attachments
+      FROM chat_messages m
+      JOIN users u ON m.sender_id = u.id
+      WHERE m.group_id = $1
+    `;
 
-    res.json(result.rows.reverse());
+    const params = [groupId];
+    let paramIndex = 2;
+
+    if (cursor) {
+      const decoded = Buffer.from(cursor, 'base64').toString('ascii');
+      const [timestamp, id] = decoded.split('_');
+      query += ` AND (m.created_at < $${paramIndex} OR (m.created_at = $${paramIndex} AND m.id < $${paramIndex + 1}))`;
+      params.push(timestamp, id);
+      paramIndex += 2;
+    }
+
+    query += `
+      ORDER BY m.created_at DESC, m.id DESC
+      LIMIT $${paramIndex}
+    `;
+    params.push(parseInt(limit) + 1);
+
+    const result = await pool.query(query, params);
+    
+    const hasMore = result.rows.length > parseInt(limit);
+    const items = hasMore ? result.rows.slice(0, parseInt(limit)) : result.rows;
+    
+    let nextCursor = null;
+    if (hasMore && items.length > 0) {
+      const lastItem = items[items.length - 1];
+      nextCursor = Buffer.from(`${lastItem.created_at}_${lastItem.id}`).toString('base64');
+    }
+
+    res.json({
+      messages: items.reverse(),
+      hasMore,
+      nextCursor
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Failed to fetch messages' });
@@ -334,38 +374,69 @@ router.get('/private/messages/:userId', auth, async (req, res) => {
   try {
     const { userId } = req.params;
     const currentUserId = req.user.id;
-    const { limit = 50, offset = 0 } = req.query;
+    const { limit = 50, cursor } = req.query;
 
-    const result = await pool.query(
-      `SELECT pm.*,
-              u1.full_name as sender_name,
-              u1.email as sender_email,
-              u2.full_name as receiver_name,
-              u2.email as receiver_email,
-              (SELECT json_agg(json_build_object('file_name', a.file_name, 'file_path', a.file_path, 'file_size', a.file_size, 'mime_type', a.mime_type))
-               FROM chat_private_attachments a WHERE a.message_id = pm.id) as attachments,
-              (SELECT json_agg(json_build_object('user_id', r.user_id, 'emoji', r.emoji, 'full_name', ru.full_name))
-               FROM chat_private_reactions r JOIN users ru ON r.user_id = ru.id WHERE r.message_id = pm.id) as reactions,
-              (SELECT json_build_object('id', pp.id, 'content', pp.content, 'sender_name', pu.full_name)
-               FROM chat_private_messages pp JOIN users pu ON pp.sender_id = pu.id WHERE pp.id = pm.parent_message_id) as parent_message
-       FROM chat_private_messages pm
-       JOIN users u1 ON pm.sender_id = u1.id
-       JOIN users u2 ON pm.receiver_id = u2.id
-       WHERE (pm.sender_id = $1 AND pm.receiver_id = $2)
-          OR (pm.sender_id = $2 AND pm.receiver_id = $1)
-       ORDER BY pm.created_at DESC
-       LIMIT $3 OFFSET $4`,
-      [currentUserId, userId, limit, offset]
-    );
+    let query = `
+      SELECT pm.*,
+             u1.full_name as sender_name,
+             u1.email as sender_email,
+             u2.full_name as receiver_name,
+             u2.email as receiver_email,
+             COALESCE(
+               (SELECT json_agg(json_build_object('file_name', a.file_name, 'file_path', a.file_path, 'file_size', a.file_size, 'mime_type', a.mime_type))
+                FROM chat_private_attachments a WHERE a.message_id = pm.id),
+               '[]'
+             ) as attachments,
+             COALESCE(
+               (SELECT json_agg(json_build_object('user_id', r.user_id, 'emoji', r.emoji, 'full_name', ru.full_name))
+                FROM chat_private_reactions r JOIN users ru ON r.user_id = ru.id WHERE r.message_id = pm.id),
+               '[]'
+             ) as reactions
+      FROM chat_private_messages pm
+      JOIN users u1 ON pm.sender_id = u1.id
+      JOIN users u2 ON pm.receiver_id = u2.id
+      WHERE (pm.sender_id = $1 AND pm.receiver_id = $2)
+         OR (pm.sender_id = $2 AND pm.receiver_id = $1)
+    `;
 
-    const messages = result.rows.reverse();
+    const params = [currentUserId, userId];
+    let paramIndex = 3;
+
+    if (cursor) {
+      const decoded = Buffer.from(cursor, 'base64').toString('ascii');
+      const [timestamp, id] = decoded.split('_');
+      query += ` AND (pm.created_at < $${paramIndex} OR (pm.created_at = $${paramIndex} AND pm.id < $${paramIndex + 1}))`;
+      params.push(timestamp, id);
+      paramIndex += 2;
+    }
+
+    query += `
+      ORDER BY pm.created_at DESC, pm.id DESC
+      LIMIT $${paramIndex}
+    `;
+    params.push(parseInt(limit) + 1);
+
+    const result = await pool.query(query, params);
+    
+    const hasMore = result.rows.length > parseInt(limit);
+    const items = hasMore ? result.rows.slice(0, parseInt(limit)) : result.rows;
+    
+    let nextCursor = null;
+    if (hasMore && items.length > 0) {
+      const lastItem = items[items.length - 1];
+      nextCursor = Buffer.from(`${lastItem.created_at}_${lastItem.id}`).toString('base64');
+    }
 
     await pool.query(
       'UPDATE chat_private_messages SET is_read = true WHERE sender_id = $1 AND receiver_id = $2 AND is_read = false',
       [userId, currentUserId]
     );
 
-    res.json(messages);
+    res.json({
+      messages: items.reverse(),
+      hasMore,
+      nextCursor
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Failed to fetch private messages' });

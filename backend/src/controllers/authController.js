@@ -55,7 +55,7 @@ exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const result = await pool.query('SELECT id, full_name, email, role, organization, password_hash, is_active FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
 
     if (!user) {
